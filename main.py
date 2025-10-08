@@ -4581,44 +4581,21 @@ async def process_url_complete(update: Update, context: ContextTypes.DEFAULT_TYP
                 try:
                     # Create topic
                     logger.info(f"🎯 Creating group topic with title: {clean_title}")
-                    topic_result = await create_group_topic(clean_title, GROUP_ID)
+                    topic_id = await create_group_topic(clean_title, GROUP_ID)
 
-                    if topic_result:
-                        logger.info(f"✅ Group topic created successfully: {clean_title}")
+                    if topic_id:
+                        logger.info(f"✅ Group topic created successfully: {clean_title} (ID: {topic_id})")
 
                         # Post title to topic
                         try:
-                            # Use the same client reuse logic as other functions
-                            global fast_telegram_client
-                            client_to_use = None
-
-                            if fast_telegram_client and fast_telegram_client.is_connected():
-                                logger.info("🚀 Using existing FastTelethon client for title posting")
-                                client_to_use = fast_telegram_client
-                            elif telegram_client and telegram_client.is_connected():
-                                logger.info("📞 Using existing Telegram client for title posting")
-                                client_to_use = telegram_client
-                            else:
-                                logger.error("❌ No connected client available for title posting")
-                                raise Exception("No connected client available")
-
-                            # Get group entity first
+                            client_to_use = telegram_client
                             group_entity = await client_to_use.get_entity(GROUP_ID)
-
-                            # Get topic ID from the result
-                            if hasattr(topic_result, 'updates') and topic_result.updates:
-                                topic_id = topic_result.updates[0].id
-                                logger.info(f"📤 Posting title to forum topic ID: {topic_id}")
-
-                                # Post title as text message to topic using reply_to
-                                await client_to_use.send_message(
-                                    group_entity,
-                                    clean_title,
-                                    reply_to=topic_id
-                                )
-                                logger.info(f"📤 Title posted to group topic")
-                            else:
-                                logger.warning("❌ Could not get topic ID for title posting")
+                            await client_to_use.send_message(
+                                group_entity,
+                                clean_title,
+                                reply_to=topic_id
+                            )
+                            logger.info(f"📤 Title posted to group topic")
                         except Exception as e:
                             logger.error(f"❌ Failed to post title to group topic: {e}")
 
@@ -4640,10 +4617,9 @@ async def process_url_complete(update: Update, context: ContextTypes.DEFAULT_TYP
                                         logger.error(f"Error preparing image for group: {e}")
 
                                 if image_files_for_group:
-                                    # Add delay before posting to group to avoid flood control
                                     logger.info(f"⏳ Waiting 3s before posting {len(image_files_for_group)} images to group...")
                                     await asyncio.sleep(3)
-                                    await post_images_to_group_topic(image_files_for_group, topic_result, GROUP_ID)
+                                    await post_images_to_group_topic(image_files_for_group, topic_id, GROUP_ID)
                                     logger.info(f"📤 Images posted to group topic")
 
                                 # Clean up group image files
@@ -4657,7 +4633,7 @@ async def process_url_complete(update: Update, context: ContextTypes.DEFAULT_TYP
 
                         logger.info(f"✅ All content posted to group topic")
                     else:
-                        logger.warning("❌ Failed to create group topic")
+                        logger.warning("❌ Failed to create group topic, posting to group without topic.")
                 except Exception as e:
                     logger.error(f"❌ Error creating group topic: {e}")
             else:
@@ -5415,44 +5391,21 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             # Create topic
             logger.info(f"🎯 Creating group topic with title: {clean_title}")
-            topic_result = await create_group_topic(clean_title, GROUP_ID)
+            topic_id = await create_group_topic(clean_title, GROUP_ID)
 
-            if topic_result:
-                logger.info(f"✅ Group topic created successfully: {clean_title}")
+            if topic_id:
+                logger.info(f"✅ Group topic created successfully: {clean_title} (ID: {topic_id})")
 
                 # Post title to topic
                 try:
-                    # Use the same client reuse logic as other functions
-                    global fast_telegram_client
-                    client_to_use = None
-
-                    if fast_telegram_client and fast_telegram_client.is_connected():
-                        logger.info("🚀 Using existing FastTelethon client for title posting")
-                        client_to_use = fast_telegram_client
-                    elif telegram_client and telegram_client.is_connected():
-                        logger.info("📞 Using existing Telegram client for title posting")
-                        client_to_use = telegram_client
-                    else:
-                        logger.error("❌ No connected client available for title posting")
-                        raise Exception("No connected client available")
-
-                    # Get group entity first
+                    client_to_use = telegram_client
                     group_entity = await client_to_use.get_entity(GROUP_ID)
-
-                    # Get topic ID from the result
-                    if hasattr(topic_result, 'updates') and topic_result.updates:
-                        topic_id = topic_result.updates[0].id
-                        logger.info(f"📤 Posting title to forum topic ID: {topic_id}")
-
-                        # Post title as text message to topic using reply_to
-                        await client_to_use.send_message(
-                            group_entity,
-                            clean_title,
-                            reply_to=topic_id
-                        )
-                        logger.info(f"📤 Title posted to group topic")
-                    else:
-                        logger.warning("❌ Could not get topic ID for title posting")
+                    await client_to_use.send_message(
+                        group_entity,
+                        clean_title,
+                        reply_to=topic_id
+                    )
+                    logger.info(f"📤 Title posted to group topic")
                 except Exception as e:
                     logger.error(f"❌ Failed to post title to group topic: {e}")
 
@@ -5508,7 +5461,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
                                 for retry in range(max_retries):
                                     try:
-                                        await post_images_to_group_topic(batch_images_group, topic_result, GROUP_ID)
+                                        await post_images_to_group_topic(batch_images_group, topic_id, GROUP_ID)
                                         logger.info(f"✅ Group Batch {batch_num + 1}/{total_batches} completed successfully!")
                                         break  # Success, exit retry loop
 
@@ -5559,28 +5512,15 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
                                 try:
                                     with open(video_file, 'rb') as video:
-                                        if hasattr(topic_result, 'is_forum') and not topic_result.is_forum:
-                                            # Regular group posting
-                                            result = await context.bot.send_video(
-                                                chat_id=GROUP_ID,
-                                                video=video,
-                                                caption="",
-                                                supports_streaming=True,
-                                                width=1920,
-                                                height=1080
-                                            )
-                                        else:
-                                            # Forum topic posting
-                                            topic_id = topic_result.updates[0].id if hasattr(topic_result, 'updates') and topic_result.updates else topic_result.id
-                                            result = await context.bot.send_video(
-                                                chat_id=GROUP_ID,
-                                                video=video,
-                                                caption="",
-                                                supports_streaming=True,
-                                                width=1920,
-                                                height=1080,
-                                                reply_to_message_id=topic_id
-                                            )
+                                        result = await context.bot.send_video(
+                                            chat_id=GROUP_ID,
+                                            video=video,
+                                            caption="",
+                                            supports_streaming=True,
+                                            width=1920,
+                                            height=1080,
+                                            reply_to_message_id=topic_id
+                                        )
                                         logger.info(f"✅ Group video upload successful! Message ID: {result.message_id}")
                                         group_upload_success = True
                                 except Exception as group_error:
@@ -5595,7 +5535,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                                 # If bot upload failed due to file size, try API upload as fallback
                                 if not group_upload_success and file_size_mb > 50:
                                     logger.info(f"🚀 Bot upload failed, trying API upload for group ({file_size_mb:.1f}MB)")
-                                    await upload_to_group_topic(video_file, "", topic_result, GROUP_ID)
+                                    await upload_to_group_topic(video_file, "", topic_id, GROUP_ID)
 
                             except Exception as e:
                                 logger.error(f"❌ Failed to upload video {i} to group topic: {e}")
@@ -5620,7 +5560,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                 # Clear the downloaded videos list
                 context.user_data['downloaded_videos'] = []
             else:
-                logger.warning("❌ Failed to create group topic")
+                logger.warning("❌ Failed to create group topic, posting to group without topic.")
         except Exception as e:
             logger.error(f"❌ Error creating group topic: {e}")
 
@@ -6332,17 +6272,10 @@ async def create_group_topic(title, group_id):
             logger.warning(f"⚠️ Could not check forum support: {e}")
             supports_forum = False
 
-        # If group doesn't support forum topics, create a dummy result for regular posting
+        # If group doesn't support forum topics, return None
         if not supports_forum:
-            logger.info("📝 Creating dummy topic result for regular posting")
-            # Create a dummy result object that indicates regular posting
-            class DummyTopicResult:
-                def __init__(self, group_entity):
-                    self.id = None  # No topic ID for regular posting
-                    self.group_entity = group_entity
-                    self.is_forum = False
-
-            return DummyTopicResult(group_entity)
+            logger.info("📝 Group does not support topics. Regular posting will be used.")
+            return None
 
         # Clean title for topic name (max 128 characters)
         topic_name = title[:128] if len(title) > 128 else title
@@ -6355,16 +6288,19 @@ async def create_group_topic(title, group_id):
             icon_emoji_id=None  # No emoji - this is the working format
         ))
 
-        # Extract topic ID from the result (based on successful test)
-        if hasattr(result, 'updates') and result.updates:
-            topic_id = result.updates[0].id
-            logger.info(f"✅ Created forum topic: {topic_name} (ID: {topic_id})")
-        else:
-            topic_id = "Created Successfully"
-            logger.info(f"✅ Created forum topic: {topic_name}")
+        # Extract topic ID from the result
+        topic_id = None
+        if hasattr(result, 'updates'):
+            for update in result.updates:
+                if hasattr(update, 'message') and hasattr(update.message, 'id'):
+                    topic_id = update.message.id
+                    logger.info(f"✅ Created forum topic: {topic_name} (ID: {topic_id})")
+                    break
 
-        logger.info(f"✅ Result type: {type(result).__name__}")
-        return result
+        if not topic_id:
+            logger.warning("❌ Could not get topic ID from topic creation result.")
+
+        return topic_id
 
     except Exception as e:
         logger.error(f"❌ Failed to create forum topic: {e}")
@@ -6373,40 +6309,21 @@ async def create_group_topic(title, group_id):
         logger.error(f"❌ Full traceback: {traceback.format_exc()}")
         return None
 
-async def upload_to_group_topic(video_file, caption, topic_result, group_id):
+async def upload_to_group_topic(video_file, caption, topic_id, group_id):
     """Upload video to a forum topic in a group or as regular message"""
     try:
         global telegram_client
 
-        # Try to use existing connected clients first to avoid database lock
-        client_to_use = None
-
-        if telegram_client and telegram_client.is_connected():
-            logger.info("📞 Using existing Telegram client for group upload")
-            client_to_use = telegram_client
-        else:
-            # Only initialize if no clients are available
-            if not telegram_client:
-                await init_telegram_client()
-
-            if not telegram_client:
-                return False
-
-            # Ensure client is connected
-            if not telegram_client.is_connected():
-                await telegram_client.connect()
-
+        client_to_use = telegram_client
+        if not client_to_use or not client_to_use.is_connected():
+            await init_telegram_client()
             client_to_use = telegram_client
 
-        # Check if this is a forum topic or regular posting
-        if hasattr(topic_result, 'is_forum') and not topic_result.is_forum:
-            # Regular posting (not forum topic)
-            logger.info("📤 Uploading as regular message to group")
-            group_entity = topic_result.group_entity
-        else:
-            # Forum topic posting
-            logger.info("📤 Uploading to forum topic")
-            group_entity = await client_to_use.get_entity(group_id)
+        if not client_to_use:
+            logger.error("❌ Telegram client is not available for group upload.")
+            return False
+
+        group_entity = await client_to_use.get_entity(group_id)
 
         # Get file size
         file_size = os.path.getsize(video_file)
@@ -6415,97 +6332,56 @@ async def upload_to_group_topic(video_file, caption, topic_result, group_id):
         # Use FastTelethonhelper for ultra-fast uploads
         if FAST_TELETHON_AVAILABLE:
             logger.info("⚡ Using FastTelethonhelper for ultra-fast group upload")
-            if not fast_telegram_client:
-                await init_fast_telegram_client()
+            try:
+                # Use FastTelethonhelper's fast_upload
+                from FastTelethonhelper import fast_upload
 
-            if fast_telegram_client:
-                try:
-                    # Ensure client is connected
-                    if not fast_telegram_client.is_connected():
-                        await fast_telegram_client.connect()
-
-                    # Use FastTelethonhelper's fast_upload
-                    from FastTelethonhelper import fast_upload
-
-                    # Create progress callback for FastTelethonhelper
-                    def fast_progress_callback(done, total):
-                        if done % (5 * 1024 * 1024) == 0:  # Log every 5MB
-                            mb_uploaded = done // (1024 * 1024)
-                            if total > 0:
-                                progress = (done / total) * 100
-                                logger.info(f"⚡ FastTelethonhelper Group: {mb_uploaded}MB ({progress:.1f}%)")
-                            else:
-                                logger.info(f"⚡ FastTelethonhelper Group: {mb_uploaded}MB")
-
-                    # Use FastTelethonhelper's fast_upload
-                    file_object = await fast_upload(
-                        fast_telegram_client,
-                        video_file,
-                        reply=None,
-                        name=os.path.basename(video_file),
-                        progress_bar_function=fast_progress_callback
-                    )
-
-                    # Send the file to group as video with streaming support
-                    if hasattr(topic_result, 'is_forum') and not topic_result.is_forum:
-                        # Regular message posting
-                        result = await fast_telegram_client.send_file(
-                            group_entity,
-                            file_object,
-                            caption=caption,
-                            supports_streaming=True,
-                            video_note=False,
-                            force_document=False
-                        )
-                    else:
-                        # Forum topic posting - use the correct topic ID format
-                        if hasattr(topic_result, 'updates') and topic_result.updates:
-                            topic_id = topic_result.updates[0].id
+                # Create progress callback for FastTelethonhelper
+                def fast_progress_callback(done, total):
+                    if done % (5 * 1024 * 1024) == 0:  # Log every 5MB
+                        mb_uploaded = done // (1024 * 1024)
+                        if total > 0:
+                            progress = (done / total) * 100
+                            logger.info(f"⚡ FastTelethonhelper Group: {mb_uploaded}MB ({progress:.1f}%)")
                         else:
-                            topic_id = topic_result.id if hasattr(topic_result, 'id') else None
+                            logger.info(f"⚡ FastTelethonhelper Group: {mb_uploaded}MB")
 
-                        logger.info(f"📤 Posting to forum topic ID: {topic_id}")
-                        result = await fast_telegram_client.send_file(
-                            group_entity,
-                            file_object,
-                            caption=caption,
-                            supports_streaming=True,
-                            video_note=False,
-                            force_document=False,
-                            reply_to=topic_id
-                        )
+                # Use FastTelethonhelper's fast_upload
+                file_object = await fast_upload(
+                    client_to_use,
+                    video_file,
+                    reply=None,
+                    name=os.path.basename(video_file),
+                    progress_bar_function=fast_progress_callback
+                )
 
-                    logger.info(f"✅ Successfully uploaded to group via FastTelethonhelper: {result.id}")
-                    return True
+                # Send the file to group as video with streaming support
+                result = await client_to_use.send_file(
+                    group_entity,
+                    file_object,
+                    caption=caption,
+                    supports_streaming=True,
+                    video_note=False,
+                    force_document=False,
+                    reply_to=topic_id
+                )
 
-                except Exception as e:
-                    logger.warning(f"FastTelethonhelper failed for group upload: {e}")
-                    # Fall back to standard method
-                    logger.info("📤 Falling back to standard upload method for group")
+                logger.info(f"✅ Successfully uploaded to group via FastTelethonhelper: {result.id}")
+                return True
+
+            except Exception as e:
+                logger.warning(f"FastTelethonhelper failed for group upload: {e}")
+                # Fall back to standard method
+                logger.info("📤 Falling back to standard upload method for group")
 
         # Standard upload method (fallback)
         with open(video_file, 'rb') as video:
-            if hasattr(topic_result, 'is_forum') and not topic_result.is_forum:
-                # Regular message posting
-                result = await client_to_use.send_file(
-                    group_entity,
-                    video,
-                    supports_streaming=True
-                )
-            else:
-                # Forum topic posting - use the correct topic ID format
-                if hasattr(topic_result, 'updates') and topic_result.updates:
-                    topic_id = topic_result.updates[0].id
-                else:
-                    topic_id = topic_result.id if hasattr(topic_result, 'id') else None
-
-                logger.info(f"📤 Posting to forum topic ID: {topic_id}")
-                result = await client_to_use.send_file(
-                    group_entity,
-                    video,
-                    supports_streaming=True,
-                    reply_to=topic_id
-                )
+            result = await client_to_use.send_file(
+                group_entity,
+                video,
+                supports_streaming=True,
+                reply_to=topic_id
+            )
 
         logger.info(f"✅ Successfully uploaded to group: {result.id}")
         return True
@@ -6514,64 +6390,32 @@ async def upload_to_group_topic(video_file, caption, topic_result, group_id):
         logger.error(f"❌ Failed to upload to group: {e}")
         return False
 
-async def post_images_to_group_topic(image_files, topic_result, group_id):
+async def post_images_to_group_topic(image_files, topic_id, group_id):
     """Post images to a forum topic in a group or as regular messages"""
     try:
         global telegram_client
 
-        # Try to use existing connected clients first to avoid database lock
-        client_to_use = None
-
-        if telegram_client and telegram_client.is_connected():
-            logger.info("📞 Using existing Telegram client for image upload")
-            client_to_use = telegram_client
-        else:
-            # Only initialize if no clients are available
-            if not telegram_client:
-                await init_telegram_client()
-
-            if not telegram_client:
-                return False
-
+        client_to_use = telegram_client
+        if not client_to_use or not client_to_use.is_connected():
+            await init_telegram_client()
             client_to_use = telegram_client
 
-        # Ensure client is connected
-        if not client_to_use.is_connected():
-            await client_to_use.connect()
+        if not client_to_use:
+            logger.error("❌ Telegram client is not available for image upload.")
+            return False
 
-        # Check if this is a forum topic or regular posting
-        if hasattr(topic_result, 'is_forum') and not topic_result.is_forum:
-            # Regular posting (not forum topic)
-            logger.info("📤 Posting images as regular messages to group")
-            group_entity = topic_result.group_entity
-        else:
-            # Forum topic posting
-            logger.info("📤 Posting images to forum topic")
-            group_entity = await client_to_use.get_entity(group_id)
+        group_entity = await client_to_use.get_entity(group_id)
 
         successful_uploads = 0
 
         for image_file in image_files:
             try:
                 with open(image_file, 'rb') as image:
-                    if hasattr(topic_result, 'is_forum') and not topic_result.is_forum:
-                        # Regular message posting
-                        result = await client_to_use.send_file(
-                            group_entity,
-                            image
-                        )
-                    else:
-                        # Forum topic posting - use the correct topic ID format
-                        if hasattr(topic_result, 'updates') and topic_result.updates:
-                            topic_id = topic_result.updates[0].id
-                        else:
-                            topic_id = topic_result.id if hasattr(topic_result, 'id') else None
-
-                        result = await client_to_use.send_file(
-                            group_entity,
-                            image,
-                            reply_to=topic_id
-                        )
+                    result = await client_to_use.send_file(
+                        group_entity,
+                        image,
+                        reply_to=topic_id
+                    )
 
                     successful_uploads += 1
                     logger.info(f"✅ Uploaded image {successful_uploads}/{len(image_files)}")
@@ -6844,16 +6688,6 @@ async def client_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             status_message += f"• **Telegram API**: ❌ Not connected\n"
 
-        # Check FastTelethon client
-        global fast_telegram_client
-        if fast_telegram_client and fast_telegram_client.is_connected():
-            try:
-                me = await fast_telegram_client.get_me()
-                status_message += f"• **FastTelethon**: ✅ Ready (Connected as {me.first_name})\n"
-            except:
-                status_message += f"• **FastTelethon**: ⚠️ Connected but not authorized\n"
-        else:
-            status_message += f"• **FastTelethon**: ❌ Not connected\n"
 
         # Check channel access
         status_message += f"\n**📺 Channel Access Check:**\n"

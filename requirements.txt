@@ -1,0 +1,36 @@
+# Core Telegram Bot Dependencies
+python-telegram-bot>=20.0
+telethon>=1.28.0
+
+# Fast Upload Optimization Libraries
+FastTelethonhelper>=1.0.0
+tgcrypto>=1.2.0
+
+# Async HTTP and File Handling
+aiohttp>=3.8.0
+aiofiles>=23.0.0
+
+# Web Scraping and Parsing
+beautifulsoup4>=4.9.3
+cloudscraper>=1.2.60
+requests>=2.25.0
+
+# Media Processing
+yt-dlp>=2023.11.16
+ffmpeg-python>=0.2.0
+
+# Web Framework
+Flask>=2.0.0
+
+# Progress and Utilities
+tqdm>=4.64.0
+brotli>=1.0.0
+
+# Optional Advanced Cloudflare Bypass (uncomment if needed)
+# aiohttp-chromium>=0.0.1
+
+# FFmpeg Installation Notes:
+# - Windows: Download from https://ffmpeg.org/download.html and add to PATH
+# - Linux: sudo apt install ffmpeg (Ubuntu/Debian) or sudo yum install ffmpeg (CentOS/RHEL)
+# - macOS: brew install ffmpeg
+# - The ffmpeg-python package provides Python bindings for FFmpeg commands

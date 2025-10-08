@@ -46,14 +46,14 @@ except ImportError:
     AIOHTTP_CHROMIUM_AVAILABLE = False
     logger.warning("⚠️ aiohttp_chromium not available, using standard methods")
 
-# Import yt-dlp for JWPlayer video downloads
+# Import yt-dlp for all video downloads
 try:
     import yt_dlp
     YT_DLP_AVAILABLE = True
-    logger.info("✅ yt-dlp available for JWPlayer video downloads")
+    logger.info("✅ yt-dlp available for all video downloads")
 except ImportError:
     YT_DLP_AVAILABLE = False
-    logger.warning("⚠️ yt-dlp not available, JWPlayer downloads will use fallback method")
+    logger.warning("⚠️ yt-dlp not available. Video downloads may fail.")
 
 # Import streamlit for JWPlayer video downloads (alternative approach)
 try:
@@ -93,14 +93,6 @@ except ImportError:
     logger.warning("⚠️ FastTelethonhelper not available, using standard Telethon")
 
 # Pyrogram removed - using FastTelethon only for fast uploads
-
-try:
-    import tgcrypto
-    TGCRYPTO_AVAILABLE = True
-    logger.info("✅ TgCrypto available for crypto acceleration")
-except ImportError:
-    TGCRYPTO_AVAILABLE = False
-    logger.warning("⚠️ TgCrypto not available, using standard crypto")
 
 # Import credentials from info.py
 try:
@@ -337,24 +329,6 @@ async def auth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Auth check failed: {e}")
 
-    # Also check session file directly as fallback
-    if os.path.exists('bot_session.session'):
-        try:
-            test_client = TelegramClient('bot_session', API_ID, API_HASH)
-            await test_client.connect()
-            if await test_client.is_user_authorized():
-                me = await test_client.get_me()
-                await test_client.disconnect()
-                await update.message.reply_text(
-                    f"✅ **Already authenticated!**\n\n"
-                    f"Connected as: **{me.first_name}** (@{me.username})\n"
-                    f"Telegram API is ready for large video uploads.",
-                    parse_mode='Markdown'
-                )
-                return ConversationHandler.END
-            await test_client.disconnect()
-        except Exception as e:
-            logger.warning(f"Session file check failed: {e}")
     
     # Start authentication
     await update.message.reply_text(
@@ -2112,6 +2086,57 @@ class ContentExtractor:
             logger.error(f"Download error for {image_url}: {e}")
             return None
 
+    def download_video_with_ytdlp(self, video_url, filename=None, referrer_url=None):
+        """Download any video using yt-dlp."""
+        logger.info(f"🎬 Using yt-dlp to download video from: {video_url}")
+
+        if not YT_DLP_AVAILABLE:
+            logger.error("❌ yt-dlp is not available.")
+            return None
+
+        try:
+            # Create output directory if it doesn't exist
+            os.makedirs(self.temp_dir, exist_ok=True)
+
+            # Generate output filename
+            if not filename:
+                filename = "video"
+
+            output_template = os.path.join(self.temp_dir, f"{filename}.%(ext)s")
+
+            ydl_opts = {
+                'outtmpl': output_template,
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                'retries': 3,
+                'fragment_retries': 3,
+            }
+
+            if referrer_url:
+                ydl_opts['referer'] = referrer_url
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([video_url])
+
+            # Find the downloaded file
+            for file in os.listdir(self.temp_dir):
+                if file.startswith(filename):
+                    filepath = os.path.join(self.temp_dir, file)
+                    if os.path.exists(filepath) and os.path.getsize(filepath) > 100:
+                         logger.info(f"✅ yt-dlp download successful: {filepath}")
+                         return filepath
+
+            logger.error(f"❌ yt-dlp download seems to have failed for {video_url}. No file found.")
+            return None
+
+        except Exception as e:
+            import traceback
+            logger.error(f"❌ yt-dlp download error for {video_url}: {e}")
+            logger.error(traceback.format_exc())
+            return None
+
     async def download_m3u8_stream(self, m3u8_url, filename=None, referrer_url=None):
         """Download M3U8 HLS stream and convert to MP4"""
         try:
@@ -2796,207 +2821,25 @@ class ContentExtractor:
             return None
 
     async def download_video_async(self, video_url, filename=None, referrer_url=None):
-        """Download video from direct MP4 URL or M3U8 stream using aiohttp (FASTER)"""
+        """Download video from any source using yt-dlp."""
+        logger.info(f"Initiating download for {video_url} using yt-dlp wrapper.")
         try:
-            logger.info(f"Starting async download for: {video_url}")
-
-            # Check if it's an M3U8 stream
-            if '.m3u8' in video_url.lower():
-                logger.info("🎬 Detected M3U8 stream, using specialized downloader")
-                return await self.download_m3u8_stream(video_url, filename, referrer_url)
-
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'identity',
-                'Range': 'bytes=0-',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Sec-Fetch-Dest': 'video',
-                'Sec-Fetch-Mode': 'no-cors',
-                'Sec-Fetch-Site': 'cross-site',
-            }
-
-            if referrer_url:
-                headers['Referer'] = referrer_url
-            elif self.is_vidoza_url(referrer_url or video_url):
-                headers['Referer'] = 'https://vidoza.net/'
-
-            if not filename:
-                parsed_url = urlparse(video_url)
-                filename = os.path.basename(parsed_url.path)
-                if not filename or not filename.endswith('.mp4'):
-                    filename = 'video.mp4'
-
-            if not filename.endswith('.mp4'):
-                filename += '.mp4'
-
-            file_path = os.path.join(self.temp_dir, filename)
-            logger.info(f"Saving to: {file_path}")
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(video_url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as response:
-                    if response.status not in [200, 206, 302, 301, 307, 308]:
-                        logger.error(f"HTTP {response.status}: {response.reason}")
-                        return None
-
-                    content_type = response.headers.get('content-type', '').lower()
-                    logger.info(f"Content-Type: {content_type}")
-
-                    if not any(vid_type in content_type for vid_type in ['video/', 'application/octet-stream', 'application/x-mpegurl', 'application/vnd.apple.mpegurl']):
-                        if 'text/html' in content_type:
-                            logger.error("Received HTML instead of video")
-                            return None
-                        else:
-                            logger.warning(f"Unexpected content-type: {content_type}, proceeding anyway...")
-
-                    total_size = int(response.headers.get('content-length', 0))
-                    downloaded = 0
-
-                    async with aiofiles.open(file_path, 'wb') as f:
-                        async for chunk in response.content.iter_chunked(8192):
-                            if chunk:
-                                await f.write(chunk)
-                                downloaded += len(chunk)
-
-                                # Log progress every 1MB
-                                if downloaded % (1024 * 1024) == 0:
-                                    mb_downloaded = downloaded // (1024 * 1024)
-                                    if total_size > 0:
-                                        progress = (downloaded / total_size) * 100
-                                        logger.info(f"📥 Downloaded {mb_downloaded}MB ({progress:.1f}%) - {os.path.basename(video_url)}")
-                                    else:
-                                        logger.info(f"📥 Downloaded {mb_downloaded}MB - {os.path.basename(video_url)}")
-
-            file_size = os.path.getsize(file_path)
-            logger.info(f"Async download completed. File size: {file_size / 1024 / 1024:.1f}MB")
-
-            if file_size > 100:  # Reduced threshold from 1000 to 100 bytes
-                return file_path
-            else:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                logger.error("Downloaded file too small, likely corrupted")
-                return None
-
+            # yt-dlp can be slow, so run it in an executor to avoid blocking the event loop
+            loop = asyncio.get_running_loop()
+            video_file = await loop.run_in_executor(
+                None,  # Use the default executor
+                self.download_video_with_ytdlp,
+                video_url,
+                filename,
+                referrer_url
+            )
+            return video_file
         except Exception as e:
-            logger.error(f"Async video download error for {video_url}: {e}")
-            # Try with different headers as fallback
-            try:
-                logger.info("🔄 Trying download with alternative headers...")
-                fallback_headers = {
-                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
-                    'Accept': '*/*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Connection': 'keep-alive',
-                }
-                if referrer_url:
-                    fallback_headers['Referer'] = referrer_url
-
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(video_url, headers=fallback_headers, timeout=aiohttp.ClientTimeout(total=120)) as response:
-                        if response.status in [200, 206, 302, 301, 307, 308]:
-                            file_path = os.path.join(self.temp_dir, filename or 'video_fallback.mp4')
-                            async with aiofiles.open(file_path, 'wb') as f:
-                                async for chunk in response.content.iter_chunked(8192):
-                                    if chunk:
-                                        await f.write(chunk)
-
-                            file_size = os.path.getsize(file_path)
-                            if file_size > 100:
-                                logger.info(f"✅ Fallback download successful: {file_size / 1024 / 1024:.1f}MB")
-                                return file_path
-                            else:
-                                if os.path.exists(file_path):
-                                    os.remove(file_path)
-            except Exception as fallback_error:
-                logger.error(f"Fallback download also failed: {fallback_error}")
-
+            import traceback
+            logger.error(f"Error executing download_video_with_ytdlp via executor: {e}")
+            logger.error(traceback.format_exc())
             return None
 
-    def download_video(self, video_url, filename=None, referrer_url=None):
-        """Download video from direct MP4 URL (synchronous fallback)"""
-        try:
-            logger.info(f"Starting download for: {video_url}")
-
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'identity',
-                'Range': 'bytes=0-',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Sec-Fetch-Dest': 'video',
-                'Sec-Fetch-Mode': 'no-cors',
-                'Sec-Fetch-Site': 'cross-site',
-            }
-
-            if referrer_url:
-                headers['Referer'] = referrer_url
-            elif self.is_vidoza_url(referrer_url or video_url):
-                headers['Referer'] = 'https://vidoza.net/'
-
-            logger.info("Making HTTP request...")
-            response = self.session.get(video_url, headers=headers, timeout=60, stream=True)
-            if response.status_code not in [200, 206]:
-                logger.error(f"HTTP {response.status_code}: {response.reason}")
-                return None
-
-            content_type = response.headers.get('content-type', '').lower()
-            logger.info(f"Content-Type: {content_type}")
-
-            if not any(vid_type in content_type for vid_type in ['video/', 'application/octet-stream']):
-                if 'text/html' in content_type:
-                    logger.error("Received HTML instead of video")
-                    return None
-
-            if not filename:
-                parsed_url = urlparse(video_url)
-                filename = os.path.basename(parsed_url.path)
-                if not filename or not filename.endswith('.mp4'):
-                    filename = 'video.mp4'
-
-            if not filename.endswith('.mp4'):
-                filename += '.mp4'
-
-            file_path = os.path.join(self.temp_dir, filename)
-            logger.info(f"Saving to: {file_path}")
-
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-
-                        # Log progress every 1MB
-                        if downloaded % (1024 * 1024) == 0:
-                            mb_downloaded = downloaded // (1024 * 1024)
-                            if total_size > 0:
-                                progress = (downloaded / total_size) * 100
-                                logger.info(f"📥 Downloaded {mb_downloaded}MB ({progress:.1f}%) - {os.path.basename(video_url)}")
-                            else:
-                                logger.info(f"📥 Downloaded {mb_downloaded}MB - {os.path.basename(video_url)}")
-
-            file_size = os.path.getsize(file_path)
-            logger.info(f"Download completed. File size: {file_size / 1024 / 1024:.1f}MB")
-
-            if file_size > 100:  # Reduced threshold from 1000 to 100 bytes
-                return file_path
-            else:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                logger.error("Downloaded file too small, likely corrupted")
-                return None
-
-        except Exception as e:
-            logger.error(f"Video download error for {video_url}: {e}")
-            return None
 
     def get_file_size_mb(self, file_path):
         """Get file size in MB"""
@@ -6421,17 +6264,14 @@ async def test_bot_permissions(update: Update, context: ContextTypes.DEFAULT_TYP
 async def create_group_topic(title, group_id):
     """Create a new forum topic in a Telegram group"""
     try:
-        global telegram_client, fast_telegram_client
+        global telegram_client
 
         logger.info(f"🔍 Starting group topic creation for group: {group_id}")
 
         # Try to use the fast_telegram_client first if available (already connected)
         client_to_use = None
 
-        if fast_telegram_client and fast_telegram_client.is_connected():
-            logger.info("🚀 Using existing FastTelethon client for group topic")
-            client_to_use = fast_telegram_client
-        elif telegram_client and telegram_client.is_connected():
+        if telegram_client and telegram_client.is_connected():
             logger.info("📞 Using existing Telegram client for group topic")
             client_to_use = telegram_client
         else:
@@ -6536,15 +6376,12 @@ async def create_group_topic(title, group_id):
 async def upload_to_group_topic(video_file, caption, topic_result, group_id):
     """Upload video to a forum topic in a group or as regular message"""
     try:
-        global telegram_client, fast_telegram_client
+        global telegram_client
 
         # Try to use existing connected clients first to avoid database lock
         client_to_use = None
 
-        if fast_telegram_client and fast_telegram_client.is_connected():
-            logger.info("🚀 Using existing FastTelethon client for group upload")
-            client_to_use = fast_telegram_client
-        elif telegram_client and telegram_client.is_connected():
+        if telegram_client and telegram_client.is_connected():
             logger.info("📞 Using existing Telegram client for group upload")
             client_to_use = telegram_client
         else:
@@ -6680,15 +6517,12 @@ async def upload_to_group_topic(video_file, caption, topic_result, group_id):
 async def post_images_to_group_topic(image_files, topic_result, group_id):
     """Post images to a forum topic in a group or as regular messages"""
     try:
-        global telegram_client, fast_telegram_client
+        global telegram_client
 
         # Try to use existing connected clients first to avoid database lock
         client_to_use = None
 
-        if fast_telegram_client and fast_telegram_client.is_connected():
-            logger.info("🚀 Using existing FastTelethon client for image upload")
-            client_to_use = fast_telegram_client
-        elif telegram_client and telegram_client.is_connected():
+        if telegram_client and telegram_client.is_connected():
             logger.info("📞 Using existing Telegram client for image upload")
             client_to_use = telegram_client
         else:
@@ -6789,12 +6623,6 @@ def run_bot_polling():
                     else:
                         logger.warning("⚠️ Telegram API client initialization failed")
 
-                    # Initialize FastTelethon client
-                    if await init_fast_telegram_client():
-                        logger.info("✅ FastTelethon client initialized successfully")
-                    else:
-                        logger.warning("⚠️ FastTelethon client initialization failed")
-
                     # Pyrogram initialization removed - using FastTelethon only
                 else:
                     logger.info("ℹ️ No session file found - API clients will be initialized on first use")
@@ -6812,7 +6640,7 @@ def run_bot_polling():
             try:
                 logger.info("🧹 Cleaning up API clients...")
 
-                global telegram_client, fast_telegram_client
+                global telegram_client
 
                 # Cleanup Telegram client
                 if telegram_client:
@@ -6824,17 +6652,6 @@ def run_bot_polling():
                         logger.warning(f"⚠️ Error disconnecting Telegram client: {e}")
                     finally:
                         telegram_client = None
-
-                # Cleanup FastTelethon client
-                if fast_telegram_client:
-                    try:
-                        if fast_telegram_client.is_connected():
-                            await fast_telegram_client.disconnect()
-                            logger.info("✅ FastTelethon client disconnected")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error disconnecting FastTelethon client: {e}")
-                    finally:
-                        fast_telegram_client = None
 
                 # Pyrogram cleanup removed - no longer used
 
@@ -7003,12 +6820,6 @@ async def install_optimizations(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception as e:
             await update.message.reply_text(f"❌ **FastTelethonhelper installation failed:** {str(e)}")
 
-        # Install Pyrogram with TgCrypto
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "pyrogram[tgcrypto]"])
-            await update.message.reply_text("✅ **Pyrogram with TgCrypto installed successfully!**")
-        except Exception as e:
-            await update.message.reply_text(f"❌ **Pyrogram installation failed:** {str(e)}")
 
         await update.message.reply_text("🔄 **Please restart the bot** to enable the new optimizations!")
 
@@ -7177,11 +6988,6 @@ async def speed_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             status_text += "❌ **FastTelethonhelper:** Not available (normal)\n"
 
-        # Check TgCrypto
-        if TGCRYPTO_AVAILABLE:
-            status_text += "✅ **TgCrypto:** Available (crypto acceleration)\n"
-        else:
-            status_text += "❌ **TgCrypto:** Not available\n"
 
         status_text += "\n**Upload Method Priority:**\n"
         if FAST_TELETHON_AVAILABLE:

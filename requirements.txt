@@ -1,6 +1,7 @@
 # Core Telegram Bot Dependencies
 python-telegram-bot>=20.0
 telethon>=1.28.0
+psutil
 
 # Fast Upload Optimization Libraries
 FastTelethonhelper>=1.0.0
@@ -33,4 +34,5 @@ brotli>=1.0.0
 # - Windows: Download from https://ffmpeg.org/download.html and add to PATH
 # - Linux: sudo apt install ffmpeg (Ubuntu/Debian) or sudo yum install ffmpeg (CentOS/RHEL)
 # - macOS: brew install ffmpeg
+
 # - The ffmpeg-python package provides Python bindings for FFmpeg commands

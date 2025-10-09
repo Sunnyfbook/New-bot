@@ -59,100 +59,66 @@ def force_garbage_collection():
     except:
         return get_memory_usage()
 
-def check_memory_limit(max_memory_mb=100):
-    """Check if memory usage is approaching limit - ULTRA LOW for 128MB server"""
+def check_memory_limit(max_memory_mb=1500):
+    """Check if memory usage is approaching limit"""
     current_memory = get_memory_usage()
     if current_memory > max_memory_mb:
         logger.warning(f"⚠️ High memory usage: {current_memory:.1f}MB (limit: {max_memory_mb}MB)")
         return True
     return False
 
-def emergency_memory_cleanup():
-    """Emergency memory cleanup for ultra-low memory environments"""
+async def memory_efficient_video_upload(bot, chat_id, video_file, caption="", reply_to_message_id=None):
+    """Memory-efficient video upload using streaming"""
     try:
-        # Force multiple garbage collection cycles
-        for _ in range(3):
-            gc.collect()
+        # Check memory before upload
+        initial_memory = log_memory_usage("before video upload")
         
-        # Clear any cached objects
-        if 'content_extractor' in globals():
-            if hasattr(content_extractor, 'session'):
-                content_extractor.session.close()
+        # Check if we're approaching memory limit
+        if check_memory_limit():
+            logger.warning("⚠️ High memory usage detected, forcing garbage collection")
+            force_garbage_collection()
         
-        # Clear any global caches
-        if 'telegram_client' in globals() and telegram_client:
-            # Don't disconnect, just clear any cached data
-            pass
-            
-        memory_after = get_memory_usage()
-        logger.info(f"🚨 Emergency memory cleanup completed: {memory_after:.1f}MB")
-        return memory_after
-    except Exception as e:
-        logger.error(f"❌ Emergency cleanup failed: {e}")
-        return get_memory_usage()
-
-async def ultra_low_memory_video_upload(bot, chat_id, video_file, caption="", reply_to_message_id=None):
-    """Ultra-low memory video upload for 128MB servers"""
-    try:
-        # Emergency memory check
-        initial_memory = log_memory_usage("before ultra-low memory video upload")
-        
-        if check_memory_limit(80):  # Even stricter limit for 128MB server
-            logger.warning("🚨 CRITICAL: Memory usage too high, performing emergency cleanup")
-            emergency_memory_cleanup()
-            
         file_size = os.path.getsize(video_file)
         file_size_mb = file_size / (1024 * 1024)
         
-        # For 128MB server, treat anything >20MB as large
-        if file_size_mb > 20:
-            logger.info(f"📤 ULTRA-LOW MEMORY: Using chunked upload for file ({file_size_mb:.1f}MB)")
+        # For large files (>100MB), use streaming approach
+        if file_size_mb > 100:
+            logger.info(f"📤 Using memory-efficient streaming upload for large file ({file_size_mb:.1f}MB)")
             
-            # Create a custom file-like object that reads in tiny chunks
-            class UltraLowMemoryFile:
-                def __init__(self, file_path):
-                    self.file_path = file_path
-                    self.position = 0
-                    self.file_size = os.path.getsize(file_path)
-                    self.chunk_size = 64 * 1024  # 64KB chunks for ultra-low memory
-                
-                def read(self, size=-1):
-                    if size == -1:
-                        size = self.chunk_size
+            # Use aiofiles for async file reading to avoid blocking
+            import aiofiles
+            
+            async with aiofiles.open(video_file, 'rb') as video_stream:
+                # Create a file-like object that can be read in chunks
+                class StreamingFile:
+                    def __init__(self, file_obj):
+                        self.file_obj = file_obj
+                        self.position = 0
                     
-                    with open(self.file_path, 'rb') as f:
-                        f.seek(self.position)
-                        data = f.read(min(size, self.chunk_size))
-                        self.position += len(data)
-                        return data
+                    def read(self, size=-1):
+                        return self.file_obj.read(size)
+                    
+                    def seek(self, position):
+                        self.file_obj.seek(position)
+                        self.position = position
+                    
+                    def tell(self):
+                        return self.file_obj.tell()
                 
-                def seek(self, position):
-                    self.position = position
+                streaming_file = StreamingFile(video_stream)
                 
-                def tell(self):
-                    return self.position
-                
-                def __len__(self):
-                    return self.file_size
-            
-            ultra_file = UltraLowMemoryFile(video_file)
-            
-            result = await bot.send_video(
-                chat_id=chat_id,
-                video=ultra_file,
-                caption=caption,
-                supports_streaming=True,
-                width=1920,
-                height=1080,
-                reply_to_message_id=reply_to_message_id
-            )
+                result = await bot.send_video(
+                    chat_id=chat_id,
+                    video=streaming_file,
+                    caption=caption,
+                    supports_streaming=True,
+                    width=1920,
+                    height=1080,
+                    reply_to_message_id=reply_to_message_id
+                )
         else:
-            # For very small files, use regular upload with strict memory monitoring
-            logger.info(f"📤 ULTRA-LOW MEMORY: Using standard upload for small file ({file_size_mb:.1f}MB)")
-            
-            # Check memory before opening file
-            if check_memory_limit(90):
-                emergency_memory_cleanup()
+            # For smaller files, use regular upload but with memory monitoring
+            logger.info(f"📤 Using standard upload for file ({file_size_mb:.1f}MB)")
             
             with open(video_file, 'rb') as video:
                 result = await bot.send_video(
@@ -165,21 +131,21 @@ async def ultra_low_memory_video_upload(bot, chat_id, video_file, caption="", re
                     reply_to_message_id=reply_to_message_id
                 )
         
-        # Aggressive memory cleanup after upload
-        final_memory = log_memory_usage("after ultra-low memory video upload")
+        # Log memory after upload
+        final_memory = log_memory_usage("after video upload")
         memory_used = final_memory - initial_memory
         
-        logger.info(f"✅ Ultra-low memory video upload successful! Memory used: {memory_used:.1f}MB")
+        logger.info(f"✅ Video upload successful! Memory used: {memory_used:.1f}MB")
         
-        # Emergency cleanup after upload
-        emergency_memory_cleanup()
+        # Force garbage collection after upload
+        force_garbage_collection()
         
         return result
         
     except Exception as e:
-        logger.error(f"❌ Ultra-low memory video upload failed: {e}")
-        # Emergency cleanup on error
-        emergency_memory_cleanup()
+        logger.error(f"❌ Memory-efficient video upload failed: {e}")
+        # Force garbage collection on error
+        force_garbage_collection()
         raise e
 
 # Helper function to safely delete messages with proper error handling
@@ -3058,11 +3024,10 @@ class ContentExtractor:
             return 0
 
     def is_file_too_large(self, file_path):
-        """Check if file is too large for 128MB server (over 50MB)"""
+        """Check if file is too large for Telegram (over 2000MB)"""
         try:
             size_mb = self.get_file_size_mb(file_path)
-            # For 128MB server, limit to 50MB to prevent memory issues
-            return size_mb > 50  # Ultra-low memory limit
+            return size_mb > 2000  # Telegram's limit is 2000MB
         except:
             return False
 
@@ -4424,13 +4389,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_url_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Complete URL processing: extract everything first, then post to channel, then create topic and post everything"""
-    # ULTRA-LOW MEMORY: Check memory usage at start
+    # Check memory usage at start
     log_memory_usage("at process_url_complete start")
-    
-    # Emergency memory check for 128MB server
-    if check_memory_limit(80):
-        logger.warning("🚨 CRITICAL: Starting with high memory usage, performing emergency cleanup")
-        emergency_memory_cleanup()
     
     # Check if update.message exists
     if not update.message:
@@ -5130,19 +5090,14 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                         file_size_mb = content_extractor.get_file_size_mb(video_file)
                         logger.info(f"Processing Luluvid video {i} - File size: {file_size_mb:.1f}MB")
 
-                        # Check if file is too large for 128MB server (50MB limit)
+                        # Check if file is too large for Telegram (2000MB limit)
                         if content_extractor.is_file_too_large(video_file):
                             too_large_msg = await update.message.reply_text(
-                                f"⚠️ Luluvid video {i} is too large ({file_size_mb:.1f}MB) for 128MB server.\n"
-                                f"Maximum size is 50MB to prevent memory crashes. Consider using a video compressor."
+                                f"⚠️ Luluvid video {i} is too large ({file_size_mb:.1f}MB) for Telegram upload.\n"
+                                f"Maximum size is 2000MB. Consider using a video compressor."
                             )
                             bot_messages_to_delete.append(too_large_msg.message_id)
                             continue
-                        
-                        # ULTRA-LOW MEMORY: Check memory before processing each video
-                        if check_memory_limit(90):
-                            logger.warning(f"🚨 CRITICAL: Memory too high before video {i}, performing emergency cleanup")
-                            emergency_memory_cleanup()
 
                         # Add delay before video upload to avoid flood control
                         if i > 1:  # Don't delay the first video
@@ -5163,7 +5118,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                         for retry in range(max_retries):
                             try:
                                 logger.info(f"📤 Attempting to send Luluvid video to channel {CHANNEL_ID}...")
-                                result = await ultra_low_memory_video_upload(
+                                result = await memory_efficient_video_upload(
                                     context.bot,
                                     CHANNEL_ID,
                                     video_file,
@@ -5172,11 +5127,6 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                                 logger.info(f"✅ Bot send_video successful! Message ID: {result.message_id}")
                                 successful_downloads += 1
                                 logger.info(f"✅ Successfully uploaded Luluvid video via bot ({file_size_mb:.1f}MB)")
-
-                                # ULTRA-LOW MEMORY: Check memory after each video upload
-                                if check_memory_limit(90):
-                                    logger.warning(f"🚨 CRITICAL: Memory too high after video {i}, performing emergency cleanup")
-                                    emergency_memory_cleanup()
 
                                 # Store video file for group upload later
                                 if 'downloaded_videos' not in context.user_data:
@@ -5295,19 +5245,14 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                             file_size_mb = content_extractor.get_file_size_mb(video_file)
                             logger.info(f"Processing {type_name} video {i} - File size: {file_size_mb:.1f}MB")
 
-                            # Check if file is too large for 128MB server (50MB limit)
+                            # Check if file is too large for Telegram (2000MB limit)
                             if content_extractor.is_file_too_large(video_file):
                                 too_large_msg = await update.message.reply_text(
-                                    f"⚠️ {type_name} video {i} is too large ({file_size_mb:.1f}MB) for 128MB server.\n"
-                                    f"Maximum size is 50MB to prevent memory crashes. Consider using a video compressor."
+                                    f"⚠️ {type_name} video {i} is too large ({file_size_mb:.1f}MB) for Telegram upload.\n"
+                                    f"Maximum size is 2000MB. Consider using a video compressor."
                                 )
                                 bot_messages_to_delete.append(too_large_msg.message_id)
                                 continue
-                            
-                            # ULTRA-LOW MEMORY: Check memory before processing each video
-                            if check_memory_limit(90):
-                                logger.warning(f"🚨 CRITICAL: Memory too high before video {i}, performing emergency cleanup")
-                                emergency_memory_cleanup()
 
                             try:
                                 # Add delay before video upload to avoid flood control
@@ -5330,7 +5275,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                                 for retry in range(max_retries):
                                     try:
                                         logger.info(f"📤 Attempting to send video to channel {CHANNEL_ID}...")
-                                        result = await ultra_low_memory_video_upload(
+                                        result = await memory_efficient_video_upload(
                                             context.bot,
                                             CHANNEL_ID,
                                             video_file,
@@ -5469,11 +5414,6 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                             retry_delay = 10  # Start with 10 seconds for videos
 
                             if file_size_mb < 50:
-                                # ULTRA-LOW MEMORY: Check memory before small video processing
-                                if check_memory_limit(90):
-                                    logger.warning(f"🚨 CRITICAL: Memory too high before small video {i}, performing emergency cleanup")
-                                    emergency_memory_cleanup()
-                                
                                 # Use bot's send_video for small videos (under 50MB)
                                 logger.info(f"📤 Using bot send_video for small video ({file_size_mb:.1f}MB)")
                                 logger.info(f"📤 Channel ID: {CHANNEL_ID}")
@@ -5481,7 +5421,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                                 for retry in range(max_retries):
                                     try:
                                         logger.info(f"📤 Attempting to send video to channel {CHANNEL_ID}...")
-                                        result = await ultra_low_memory_video_upload(
+                                        result = await memory_efficient_video_upload(
                                             context.bot,
                                             CHANNEL_ID,
                                             video_file,
@@ -5547,7 +5487,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                             logger.error(f"Error sending video: {e}")
                             # Fallback to memory-efficient video upload
                             try:
-                                await ultra_low_memory_video_upload(
+                                await memory_efficient_video_upload(
                                     context.bot,
                                     CHANNEL_ID,
                                     video_file,
@@ -5712,12 +5652,6 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                 # Post videos to topic SECOND (re-upload the same videos that were uploaded to channel)
                 logger.info(f"📤 Uploading {successful_downloads} videos to group topic...")
                 log_memory_usage("before group video upload")
-                
-                # ULTRA-LOW MEMORY: Emergency memory check before group uploads
-                if check_memory_limit(85):
-                    logger.warning("🚨 CRITICAL: Memory too high before group video upload, performing emergency cleanup")
-                    emergency_memory_cleanup()
-                
                 try:
                     # Get the downloaded video files from context
                     downloaded_videos = context.user_data.get('downloaded_videos', [])
@@ -5733,11 +5667,6 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                             if video_file and os.path.exists(video_file):
                                 file_size_mb = content_extractor.get_file_size_mb(video_file)
                                 logger.info(f"📤 Uploading video {i} to group topic ({file_size_mb:.1f}MB)")
-                                
-                                # ULTRA-LOW MEMORY: Check memory before each group video upload
-                                if check_memory_limit(90):
-                                    logger.warning(f"🚨 CRITICAL: Memory too high before group video {i}, performing emergency cleanup")
-                                    emergency_memory_cleanup()
 
                                 try:
                                     # Try bot's send_video first for ALL videos in group (bot can handle up to 2GB)
@@ -5745,7 +5674,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                                     group_upload_success = False
 
                                     try:
-                                        result = await ultra_low_memory_video_upload(
+                                        result = await memory_efficient_video_upload(
                                             context.bot,
                                             GROUP_ID,
                                             video_file,

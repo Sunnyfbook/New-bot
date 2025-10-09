@@ -28,6 +28,215 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Memory optimization imports
+import gc
+import psutil
+import sys
+
+# Memory monitoring and optimization functions
+def get_memory_usage():
+    """Get current memory usage in MB"""
+    try:
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        return memory_mb
+    except:
+        return 0
+
+def log_memory_usage(operation=""):
+    """Log current memory usage"""
+    memory_mb = get_memory_usage()
+    logger.info(f"🧠 Memory usage {operation}: {memory_mb:.1f}MB")
+    return memory_mb
+
+def force_garbage_collection():
+    """Force garbage collection to free memory"""
+    try:
+        collected = gc.collect()
+        memory_after = get_memory_usage()
+        logger.info(f"🧹 Garbage collection freed {collected} objects, memory: {memory_after:.1f}MB")
+        return memory_after
+    except:
+        return get_memory_usage()
+
+def check_memory_limit(max_memory_mb=100):
+    """Check if memory usage is approaching limit - ULTRA LOW for 128MB server"""
+    current_memory = get_memory_usage()
+    if current_memory > max_memory_mb:
+        logger.warning(f"⚠️ High memory usage: {current_memory:.1f}MB (limit: {max_memory_mb}MB)")
+        return True
+    return False
+
+def emergency_memory_cleanup():
+    """Emergency memory cleanup for ultra-low memory environments"""
+    try:
+        # Force multiple garbage collection cycles
+        for _ in range(3):
+            gc.collect()
+        
+        # Clear any cached objects
+        if 'content_extractor' in globals():
+            if hasattr(content_extractor, 'session'):
+                content_extractor.session.close()
+        
+        # Clear any global caches
+        if 'telegram_client' in globals() and telegram_client:
+            # Don't disconnect, just clear any cached data
+            pass
+            
+        memory_after = get_memory_usage()
+        logger.info(f"🚨 Emergency memory cleanup completed: {memory_after:.1f}MB")
+        return memory_after
+    except Exception as e:
+        logger.error(f"❌ Emergency cleanup failed: {e}")
+        return get_memory_usage()
+
+async def ultra_low_memory_video_upload(bot, chat_id, video_file, caption="", reply_to_message_id=None):
+    """Ultra-low memory video upload for 128MB servers"""
+    try:
+        # Emergency memory check
+        initial_memory = log_memory_usage("before ultra-low memory video upload")
+        
+        if check_memory_limit(80):  # Even stricter limit for 128MB server
+            logger.warning("🚨 CRITICAL: Memory usage too high, performing emergency cleanup")
+            emergency_memory_cleanup()
+            
+        file_size = os.path.getsize(video_file)
+        file_size_mb = file_size / (1024 * 1024)
+        
+        # For 128MB server, treat anything >20MB as large
+        if file_size_mb > 20:
+            logger.info(f"📤 ULTRA-LOW MEMORY: Using chunked upload for file ({file_size_mb:.1f}MB)")
+            
+            # Create a custom file-like object that reads in tiny chunks
+            class UltraLowMemoryFile:
+                def __init__(self, file_path):
+                    self.file_path = file_path
+                    self.position = 0
+                    self.file_size = os.path.getsize(file_path)
+                    self.chunk_size = 64 * 1024  # 64KB chunks for ultra-low memory
+                
+                def read(self, size=-1):
+                    if size == -1:
+                        size = self.chunk_size
+                    
+                    with open(self.file_path, 'rb') as f:
+                        f.seek(self.position)
+                        data = f.read(min(size, self.chunk_size))
+                        self.position += len(data)
+                        return data
+                
+                def seek(self, position):
+                    self.position = position
+                
+                def tell(self):
+                    return self.position
+                
+                def __len__(self):
+                    return self.file_size
+            
+            ultra_file = UltraLowMemoryFile(video_file)
+            
+            result = await bot.send_video(
+                chat_id=chat_id,
+                video=ultra_file,
+                caption=caption,
+                supports_streaming=True,
+                width=1920,
+                height=1080,
+                reply_to_message_id=reply_to_message_id
+            )
+        else:
+            # For very small files, use regular upload with strict memory monitoring
+            logger.info(f"📤 ULTRA-LOW MEMORY: Using standard upload for small file ({file_size_mb:.1f}MB)")
+            
+            # Check memory before opening file
+            if check_memory_limit(90):
+                emergency_memory_cleanup()
+            
+            with open(video_file, 'rb') as video:
+                result = await bot.send_video(
+                    chat_id=chat_id,
+                    video=video,
+                    caption=caption,
+                    supports_streaming=True,
+                    width=1920,
+                    height=1080,
+                    reply_to_message_id=reply_to_message_id
+                )
+        
+        # Aggressive memory cleanup after upload
+        final_memory = log_memory_usage("after ultra-low memory video upload")
+        memory_used = final_memory - initial_memory
+        
+        logger.info(f"✅ Ultra-low memory video upload successful! Memory used: {memory_used:.1f}MB")
+        
+        # Emergency cleanup after upload
+        emergency_memory_cleanup()
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Ultra-low memory video upload failed: {e}")
+        # Emergency cleanup on error
+        emergency_memory_cleanup()
+        raise e
+
+# Helper function to safely delete messages with proper error handling
+async def safe_delete_message(bot, chat_id, message_id, message_type="message"):
+    """Safely delete a message with proper error handling for invalid message IDs"""
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        return True
+    except Exception as e:
+        error_msg = str(e)
+        if "MESSAGE_ID_INVALID" in error_msg or "400" in error_msg:
+            logger.debug(f"{message_type} {message_id} already deleted or invalid - skipping")
+            return False
+        elif "403" in error_msg:
+            logger.warning(f"Bot doesn't have permission to delete {message_type} {message_id}")
+            return False
+        else:
+            logger.warning(f"Could not delete {message_type} {message_id}: {e}")
+            return False
+
+# Helper function to validate group and topic IDs before posting
+async def validate_group_and_topic(group_id, topic_id=None):
+    """Validate that group and topic IDs are valid before attempting to post"""
+    try:
+        global telegram_client
+        
+        if not telegram_client or not telegram_client.is_connected():
+            logger.error("❌ Telegram client not connected for validation")
+            return False, "Telegram client not connected"
+        
+        # Validate group ID
+        try:
+            group_entity = await telegram_client.get_entity(group_id)
+            logger.info(f"✅ Group validation successful: {group_entity.title}")
+        except Exception as e:
+            logger.error(f"❌ Group validation failed: {e}")
+            return False, f"Invalid group ID: {e}"
+        
+        # Validate topic ID if provided
+        if topic_id:
+            try:
+                # Try to get the topic message to validate it exists
+                topic_message = await telegram_client.get_messages(group_entity, ids=topic_id)
+                if not topic_message:
+                    logger.error(f"❌ Topic ID {topic_id} not found")
+                    return False, f"Topic ID {topic_id} not found"
+                logger.info(f"✅ Topic validation successful: {topic_id}")
+            except Exception as e:
+                logger.error(f"❌ Topic validation failed: {e}")
+                return False, f"Invalid topic ID: {e}"
+        
+        return True, "Validation successful"
+        
+    except Exception as e:
+        logger.error(f"❌ Validation error: {e}")
+        return False, f"Validation error: {e}"
+
 # Import cloudscraper for Cloudflare bypass
 try:
     import cloudscraper
@@ -2849,10 +3058,11 @@ class ContentExtractor:
             return 0
 
     def is_file_too_large(self, file_path):
-        """Check if file is too large for Telegram (over 2000MB)"""
+        """Check if file is too large for 128MB server (over 50MB)"""
         try:
             size_mb = self.get_file_size_mb(file_path)
-            return size_mb > 2000  # Telegram's limit is 2000MB
+            # For 128MB server, limit to 50MB to prevent memory issues
+            return size_mb > 50  # Ultra-low memory limit
         except:
             return False
 
@@ -4214,6 +4424,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_url_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Complete URL processing: extract everything first, then post to channel, then create topic and post everything"""
+    # ULTRA-LOW MEMORY: Check memory usage at start
+    log_memory_usage("at process_url_complete start")
+    
+    # Emergency memory check for 128MB server
+    if check_memory_limit(80):
+        logger.warning("🚨 CRITICAL: Starting with high memory usage, performing emergency cleanup")
+        emergency_memory_cleanup()
+    
     # Check if update.message exists
     if not update.message:
         logger.warning("update.message is None")
@@ -4642,22 +4860,20 @@ async def process_url_complete(update: Update, context: ContextTypes.DEFAULT_TYP
         # Send completion message
         completion_msg = await update.message.reply_text("✅ Processing complete! All content sent to channel and group.")
         bot_messages_to_delete.append(completion_msg.message_id)
+        
+        # Log memory usage after processing
+        log_memory_usage("after processing complete")
+        force_garbage_collection()
 
     # --- New Logic for Cleaning and Restarting ---
     await asyncio.sleep(3) # Give user a moment to see the completion message
 
     # Also try to delete the user's original message
-    try:
-        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.message.message_id)
-    except Exception as e:
-        logger.warning(f"Could not delete user message: {e}")
+    await safe_delete_message(context.bot, update.effective_chat.id, update.message.message_id, "user message")
 
     # Delete all messages sent by the bot in this interaction
     for msg_id in bot_messages_to_delete:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
-        except Exception as e:
-            logger.warning(f"Could not delete message {msg_id}: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, msg_id, f"bot message {msg_id}")
 
     # Send the welcome message again to "restart" the chat from the user's perspective
     start_msg = await start(update, context) # Re-send the welcome message
@@ -4665,10 +4881,7 @@ async def process_url_complete(update: Update, context: ContextTypes.DEFAULT_TYP
     # Add the start message to cleanup list and delete it after a short delay
     if start_msg:
         await asyncio.sleep(2)
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=start_msg.message_id)
-        except Exception as e:
-            logger.warning(f"Could not delete start message: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, start_msg.message_id, "start message")
 
     return True
 
@@ -4723,20 +4936,14 @@ async def extract_images_from_html_content(update: Update, context: ContextTypes
 
     await asyncio.sleep(3) # Give user a moment to see the completion message
     for msg_id in bot_messages_to_delete:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
-        except Exception as e:
-            logger.warning(f"Could not delete message {msg_id}: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, msg_id, f"bot message {msg_id}")
 
     start_msg = await start(update, context) # Re-send the welcome message
 
     # Delete the start message after a short delay
     if start_msg:
         await asyncio.sleep(2)
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=start_msg.message_id)
-        except Exception as e:
-            logger.warning(f"Could not delete start message: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, start_msg.message_id, "start message")
 
     return True
 
@@ -4923,14 +5130,19 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                         file_size_mb = content_extractor.get_file_size_mb(video_file)
                         logger.info(f"Processing Luluvid video {i} - File size: {file_size_mb:.1f}MB")
 
-                        # Check if file is too large for Telegram (2000MB limit)
+                        # Check if file is too large for 128MB server (50MB limit)
                         if content_extractor.is_file_too_large(video_file):
                             too_large_msg = await update.message.reply_text(
-                                f"⚠️ Luluvid video {i} is too large ({file_size_mb:.1f}MB) for Telegram upload.\n"
-                                f"Maximum size is 2000MB. Consider using a video compressor."
+                                f"⚠️ Luluvid video {i} is too large ({file_size_mb:.1f}MB) for 128MB server.\n"
+                                f"Maximum size is 50MB to prevent memory crashes. Consider using a video compressor."
                             )
                             bot_messages_to_delete.append(too_large_msg.message_id)
                             continue
+                        
+                        # ULTRA-LOW MEMORY: Check memory before processing each video
+                        if check_memory_limit(90):
+                            logger.warning(f"🚨 CRITICAL: Memory too high before video {i}, performing emergency cleanup")
+                            emergency_memory_cleanup()
 
                         # Add delay before video upload to avoid flood control
                         if i > 1:  # Don't delay the first video
@@ -4950,19 +5162,21 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                         bot_upload_success = False
                         for retry in range(max_retries):
                             try:
-                                with open(video_file, 'rb') as video:
-                                    logger.info(f"📤 Attempting to send Luluvid video to channel {CHANNEL_ID}...")
-                                    result = await context.bot.send_video(
-                                        chat_id=CHANNEL_ID,
-                                        video=video,
-                                        caption=caption,
-                                        supports_streaming=True,
-                                        width=1920,
-                                        height=1080
-                                    )
-                                    logger.info(f"✅ Bot send_video successful! Message ID: {result.message_id}")
+                                logger.info(f"📤 Attempting to send Luluvid video to channel {CHANNEL_ID}...")
+                                result = await ultra_low_memory_video_upload(
+                                    context.bot,
+                                    CHANNEL_ID,
+                                    video_file,
+                                    caption
+                                )
+                                logger.info(f"✅ Bot send_video successful! Message ID: {result.message_id}")
                                 successful_downloads += 1
                                 logger.info(f"✅ Successfully uploaded Luluvid video via bot ({file_size_mb:.1f}MB)")
+
+                                # ULTRA-LOW MEMORY: Check memory after each video upload
+                                if check_memory_limit(90):
+                                    logger.warning(f"🚨 CRITICAL: Memory too high after video {i}, performing emergency cleanup")
+                                    emergency_memory_cleanup()
 
                                 # Store video file for group upload later
                                 if 'downloaded_videos' not in context.user_data:
@@ -5081,14 +5295,19 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                             file_size_mb = content_extractor.get_file_size_mb(video_file)
                             logger.info(f"Processing {type_name} video {i} - File size: {file_size_mb:.1f}MB")
 
-                            # Check if file is too large for Telegram (2000MB limit)
+                            # Check if file is too large for 128MB server (50MB limit)
                             if content_extractor.is_file_too_large(video_file):
                                 too_large_msg = await update.message.reply_text(
-                                    f"⚠️ {type_name} video {i} is too large ({file_size_mb:.1f}MB) for Telegram upload.\n"
-                                    f"Maximum size is 2000MB. Consider using a video compressor."
+                                    f"⚠️ {type_name} video {i} is too large ({file_size_mb:.1f}MB) for 128MB server.\n"
+                                    f"Maximum size is 50MB to prevent memory crashes. Consider using a video compressor."
                                 )
                                 bot_messages_to_delete.append(too_large_msg.message_id)
                                 continue
+                            
+                            # ULTRA-LOW MEMORY: Check memory before processing each video
+                            if check_memory_limit(90):
+                                logger.warning(f"🚨 CRITICAL: Memory too high before video {i}, performing emergency cleanup")
+                                emergency_memory_cleanup()
 
                             try:
                                 # Add delay before video upload to avoid flood control
@@ -5110,17 +5329,14 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                                 bot_upload_success = False
                                 for retry in range(max_retries):
                                     try:
-                                        with open(video_file, 'rb') as video:
-                                            logger.info(f"📤 Attempting to send video to channel {CHANNEL_ID}...")
-                                            result = await context.bot.send_video(
-                                                chat_id=CHANNEL_ID,
-                                                video=video,
-                                                caption=caption,
-                                                supports_streaming=True,
-                                                width=1920,
-                                                height=1080
-                                            )
-                                            logger.info(f"✅ Bot send_video successful! Message ID: {result.message_id}")
+                                        logger.info(f"📤 Attempting to send video to channel {CHANNEL_ID}...")
+                                        result = await ultra_low_memory_video_upload(
+                                            context.bot,
+                                            CHANNEL_ID,
+                                            video_file,
+                                            caption
+                                        )
+                                        logger.info(f"✅ Bot send_video successful! Message ID: {result.message_id}")
                                         successful_downloads += 1
                                         logger.info(f"✅ Successfully uploaded video via bot ({file_size_mb:.1f}MB)")
 
@@ -5253,23 +5469,25 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                             retry_delay = 10  # Start with 10 seconds for videos
 
                             if file_size_mb < 50:
+                                # ULTRA-LOW MEMORY: Check memory before small video processing
+                                if check_memory_limit(90):
+                                    logger.warning(f"🚨 CRITICAL: Memory too high before small video {i}, performing emergency cleanup")
+                                    emergency_memory_cleanup()
+                                
                                 # Use bot's send_video for small videos (under 50MB)
                                 logger.info(f"📤 Using bot send_video for small video ({file_size_mb:.1f}MB)")
                                 logger.info(f"📤 Channel ID: {CHANNEL_ID}")
                                 logger.info(f"📤 Video file: {video_file}")
                                 for retry in range(max_retries):
                                     try:
-                                        with open(video_file, 'rb') as video:
-                                            logger.info(f"📤 Attempting to send video to channel {CHANNEL_ID}...")
-                                            result = await context.bot.send_video(
-                                                chat_id=CHANNEL_ID,
-                                                video=video,
-                                                caption=caption,
-                                                supports_streaming=True,
-                                                width=1920,
-                                                height=1080
-                                            )
-                                            logger.info(f"✅ Bot send_video successful! Message ID: {result.message_id}")
+                                        logger.info(f"📤 Attempting to send video to channel {CHANNEL_ID}...")
+                                        result = await ultra_low_memory_video_upload(
+                                            context.bot,
+                                            CHANNEL_ID,
+                                            video_file,
+                                            caption
+                                        )
+                                        logger.info(f"✅ Bot send_video successful! Message ID: {result.message_id}")
                                         successful_downloads += 1
                                         logger.info(f"✅ Successfully uploaded small video via bot ({file_size_mb:.1f}MB)")
                                         break  # Success, exit retry loop
@@ -5327,19 +5545,16 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
                                     logger.error(f"❌ Failed to upload large video {i} via API after {max_retries} retries")
                         except Exception as e:
                             logger.error(f"Error sending video: {e}")
-                            # Fallback to send_video with streaming support
+                            # Fallback to memory-efficient video upload
                             try:
-                                with open(video_file, 'rb') as video:
-                                    await context.bot.send_video(
-                                        chat_id=CHANNEL_ID,
-                                        video=video,
-                                        caption="",
-                                        supports_streaming=True,
-                                        width=1920,
-                                        height=1080
-                                    )
-                                    successful_downloads += 1
-                                logger.info(f"Sent video with streaming support ({file_size_mb:.1f}MB)")
+                                await ultra_low_memory_video_upload(
+                                    context.bot,
+                                    CHANNEL_ID,
+                                    video_file,
+                                    ""
+                                )
+                                successful_downloads += 1
+                                logger.info(f"Sent video with memory-efficient upload ({file_size_mb:.1f}MB)")
                             except Exception as e2:
                                 logger.error(f"Failed to send video with streaming: {e2}")
                                 # Final fallback to document if video fails
@@ -5496,56 +5711,79 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
                 # Post videos to topic SECOND (re-upload the same videos that were uploaded to channel)
                 logger.info(f"📤 Uploading {successful_downloads} videos to group topic...")
+                log_memory_usage("before group video upload")
+                
+                # ULTRA-LOW MEMORY: Emergency memory check before group uploads
+                if check_memory_limit(85):
+                    logger.warning("🚨 CRITICAL: Memory too high before group video upload, performing emergency cleanup")
+                    emergency_memory_cleanup()
+                
                 try:
                     # Get the downloaded video files from context
                     downloaded_videos = context.user_data.get('downloaded_videos', [])
-
-                    for i, video_file in enumerate(downloaded_videos, 1):
-                        if video_file and os.path.exists(video_file):
-                            file_size_mb = content_extractor.get_file_size_mb(video_file)
-                            logger.info(f"📤 Uploading video {i} to group topic ({file_size_mb:.1f}MB)")
-
-                            try:
-                                # Try bot's send_video first for ALL videos in group (bot can handle up to 2GB)
-                                logger.info(f"📤 Using bot send_video for group upload ({file_size_mb:.1f}MB)")
-                                group_upload_success = False
+                    
+                    # Validate group and topic before posting videos
+                    is_valid, validation_msg = await validate_group_and_topic(GROUP_ID, topic_id)
+                    if not is_valid:
+                        logger.error(f"❌ Group/topic validation failed: {validation_msg}")
+                        error_msg = await update.message.reply_text(f"❌ Cannot post videos to group: {validation_msg}")
+                        bot_messages_to_delete.append(error_msg.message_id)
+                    else:
+                        for i, video_file in enumerate(downloaded_videos, 1):
+                            if video_file and os.path.exists(video_file):
+                                file_size_mb = content_extractor.get_file_size_mb(video_file)
+                                logger.info(f"📤 Uploading video {i} to group topic ({file_size_mb:.1f}MB)")
+                                
+                                # ULTRA-LOW MEMORY: Check memory before each group video upload
+                                if check_memory_limit(90):
+                                    logger.warning(f"🚨 CRITICAL: Memory too high before group video {i}, performing emergency cleanup")
+                                    emergency_memory_cleanup()
 
                                 try:
-                                    with open(video_file, 'rb') as video:
-                                        result = await context.bot.send_video(
-                                            chat_id=GROUP_ID,
-                                            video=video,
-                                            caption="",
-                                            supports_streaming=True,
-                                            width=1920,
-                                            height=1080,
-                                            reply_to_message_id=topic_id
+                                    # Try bot's send_video first for ALL videos in group (bot can handle up to 2GB)
+                                    logger.info(f"📤 Using bot send_video for group upload ({file_size_mb:.1f}MB)")
+                                    group_upload_success = False
+
+                                    try:
+                                        result = await ultra_low_memory_video_upload(
+                                            context.bot,
+                                            GROUP_ID,
+                                            video_file,
+                                            "",
+                                            topic_id
                                         )
                                         logger.info(f"✅ Group video upload successful! Message ID: {result.message_id}")
                                         group_upload_success = True
-                                except Exception as group_error:
-                                    error_msg = str(group_error)
-                                    logger.error(f"❌ Group video upload failed: {group_error}")
+                                    except Exception as group_error:
+                                        error_msg = str(group_error)
+                                        logger.error(f"❌ Group video upload failed: {group_error}")
 
-                                    if "413" in error_msg or "Request Entity Too Large" in error_msg:
-                                        logger.warning(f"⚠️ Video too large for bot API in group ({file_size_mb:.1f}MB), will try API upload")
-                                    else:
-                                        logger.error(f"❌ Group video upload error: {group_error}")
+                                        if "413" in error_msg or "Request Entity Too Large" in error_msg:
+                                            logger.warning(f"⚠️ Video too large for bot API in group ({file_size_mb:.1f}MB), will try API upload")
+                                        elif "403" in error_msg or "Forbidden" in error_msg:
+                                            logger.error(f"❌ Bot doesn't have permission to send videos to group {GROUP_ID}")
+                                        elif "400" in error_msg and "MESSAGE_ID_INVALID" in error_msg:
+                                            logger.error(f"❌ Topic ID {topic_id} is invalid - topic may have been deleted")
+                                        elif "400" in error_msg and "CHAT_WRITE_FORBIDDEN" in error_msg:
+                                            logger.error(f"❌ Bot cannot write to group {GROUP_ID} - check bot permissions")
+                                        else:
+                                            logger.error(f"❌ Group video upload error: {group_error}")
 
-                                # If bot upload failed due to file size, try API upload as fallback
-                                if not group_upload_success and file_size_mb > 50:
-                                    logger.info(f"🚀 Bot upload failed, trying API upload for group ({file_size_mb:.1f}MB)")
-                                    await upload_to_group_topic(video_file, "", topic_id, GROUP_ID)
+                                    # If bot upload failed due to file size, try API upload as fallback
+                                    if not group_upload_success and file_size_mb > 50:
+                                        logger.info(f"🚀 Bot upload failed, trying API upload for group ({file_size_mb:.1f}MB)")
+                                        await upload_to_group_topic(video_file, "", topic_id, GROUP_ID)
 
-                            except Exception as e:
-                                logger.error(f"❌ Failed to upload video {i} to group topic: {e}")
-                        else:
-                            logger.warning(f"⚠️ Video file {i} not found or invalid")
+                                except Exception as e:
+                                    logger.error(f"❌ Failed to upload video {i} to group topic: {e}")
+                            else:
+                                logger.warning(f"⚠️ Video file {i} not found or invalid")
 
                 except Exception as e:
                     logger.error(f"❌ Error uploading videos to group topic: {e}")
 
                 logger.info(f"✅ All content posted to group topic")
+                log_memory_usage("after group video upload")
 
                 # Clean up video files after group upload is complete
                 downloaded_videos = context.user_data.get('downloaded_videos', [])
@@ -5559,6 +5797,9 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
                 # Clear the downloaded videos list
                 context.user_data['downloaded_videos'] = []
+                
+                # Force garbage collection after cleanup
+                force_garbage_collection()
             else:
                 logger.warning("❌ Failed to create group topic, posting to group without topic.")
         except Exception as e:
@@ -5610,25 +5851,16 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
     await asyncio.sleep(3)
 
     # Also try to delete the user's selection message
-    try:
-        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.message.message_id)
-    except Exception as e:
-        logger.warning(f"Could not delete user selection message: {e}")
+    await safe_delete_message(context.bot, update.effective_chat.id, update.message.message_id, "user selection message")
 
     # Delete the original selection message that was sent by process_url_complete
     selection_message_id = context.user_data.get('selection_message_id')
     if selection_message_id:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=selection_message_id)
-        except Exception as e:
-            logger.warning(f"Could not delete selection message: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, selection_message_id, "selection message")
 
     # Delete all bot messages
     for msg_id in bot_messages_to_delete:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
-        except Exception as e:
-            logger.warning(f"Could not delete message {msg_id}: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, msg_id, f"bot message {msg_id}")
 
     # Clear context and restart
     context.user_data.clear()
@@ -5637,10 +5869,7 @@ async def handle_type_selection(update: Update, context: ContextTypes.DEFAULT_TY
     # Delete the start message after a short delay
     if start_msg:
         await asyncio.sleep(2)
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=start_msg.message_id)
-        except Exception as e:
-            logger.warning(f"Could not delete start message: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, start_msg.message_id, "start message")
 
 async def vidoza_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Extract and download Vidoza videos from a webpage URL"""
@@ -5688,20 +5917,14 @@ async def vidoza_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await asyncio.sleep(3)
     for msg_id in bot_messages_to_delete:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
-        except Exception as e:
-            logger.warning(f"Could not delete message {msg_id}: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, msg_id, f"bot message {msg_id}")
 
     start_msg = await start(update, context)
 
     # Delete the start message after a short delay
     if start_msg:
         await asyncio.sleep(2)
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=start_msg.message_id)
-        except Exception as e:
-            logger.warning(f"Could not delete start message: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, start_msg.message_id, "start message")
 
     return True
 
@@ -5780,20 +6003,14 @@ async def streamtape_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await asyncio.sleep(3)
     for msg_id in bot_messages_to_delete:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
-        except Exception as e:
-            logger.warning(f"Could not delete message {msg_id}: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, msg_id, f"bot message {msg_id}")
 
     start_msg = await start(update, context)
 
     # Delete the start message after a short delay
     if start_msg:
         await asyncio.sleep(2)
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=start_msg.message_id)
-        except Exception as e:
-            logger.warning(f"Could not delete start message: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, start_msg.message_id, "start message")
 
     return True
 
@@ -5846,20 +6063,14 @@ async def images_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await asyncio.sleep(3)
     for msg_id in bot_messages_to_delete:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
-        except Exception as e:
-            logger.warning(f"Could not delete message {msg_id}: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, msg_id, f"bot message {msg_id}")
 
     start_msg = await start(update, context)
 
     # Delete the start message after a short delay
     if start_msg:
         await asyncio.sleep(2)
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=start_msg.message_id)
-        except Exception as e:
-            logger.warning(f"Could not delete start message: {e}")
+        await safe_delete_message(context.bot, update.effective_chat.id, start_msg.message_id, "start message")
 
     return True
 
